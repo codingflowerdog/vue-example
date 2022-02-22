@@ -1,29 +1,29 @@
 import Vue from 'vue'
-import VueRouter, { RouteConfig } from 'vue-router'
-import Home from '../views/Home.vue'
+import VueRouter, {NavigationGuardNext, Route, RouteConfig} from 'vue-router'
+import {exampleRoutes} from "@/router/example";
 
 Vue.use(VueRouter)
 
-const routes: Array<RouteConfig> = [
-  {
-    path: '/',
-    name: 'Home',
-    component: Home
-  },
-  {
-    path: '/about',
-    name: 'About',
-    // route level code-splitting
-    // this generates a separate chunk (about.[hash].js) for this route
-    // which is lazy-loaded when the route is visited.
-    component: () => import(/* webpackChunkName: "about" */ '../views/About.vue')
-  }
-]
+const routes: Array<RouteConfig> = [];
+
+// 예제 라우트 정보 추가
+routes.push(...exampleRoutes);
+
+// 예외 라우트 설정
+routes.push( {
+    path: "*",
+    redirect: "/"
+})
 
 const router = new VueRouter({
-  mode: 'history',
-  base: process.env.BASE_URL,
-  routes
+    mode: 'history',
+    base: process.env.BASE_URL,
+    routes
+})
+
+// 라우트 가드 설정
+router.beforeEach((to: Route, from: Route, next: NavigationGuardNext) => {
+    next();
 })
 
 export default router
