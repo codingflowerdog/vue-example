@@ -1,0 +1,152 @@
+name: Docker Build and Deploy
+
+on:
+  # Workflow Manual
+  workflow_dispatch:
+    inputs:
+      isRequiredRemoteDeploy:
+        type: boolean
+        description: 원격 서버 배포
+
+  # Workflow Event
+  #push:
+  #  branches: [ master ]
+  #pull_request:
+  #  branches: [ master ]
+
+env:
+  CACHED_BUILD_PATHS: ${{ github.workspace }}/build
+  BUILD_CACHE_KEY: ${{ github.sha }}
+  REGISTRY_URL: registry.gitlab.com/codingflowerdog/dev
+  REGISTRY_NAME: vue-example
+
+jobs:
+  # Docker Build
+  docker-build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v2
+    
+      # Node 환경 설정
+      - name: Set up Node.js
+        uses: actions/setup-node@main
+        with:
+          node-version: 14.x
+      
+      # Node dependency 설치
+      - name: Npm Package Install
+        run: npm install
+
+      # Docker 빌드
+      - name: Docker Build
+        run: |
+          docker build -t spring-boot-example .
+          docker tag spring-boot-example:latest ${{ env.REGISTRY_URL }}/${{ env.REGISTRY_NAME }}:${{ github.run_number }}
+
+      # Upload Docker Image Artifact
+      - name: Upload Docker Image Artifact
+        uses: ishworkh/docker-image-artifact-upload@v1
+        with:
+          image: ${{ env.REGISTRY_URL }}/${{ env.REGISTRY_NAME }}:${{ github.run_number }}
+
+      # 빌드 결과 알림
+      - name: Notification
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          author_name: Github Action Notification
+          fields: repo, message, commit, workflow, job, took
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+  # Deploy
+  deploy:
+    runs-on: ubuntu-latest
+    needs: docker-build
+
+    steps:
+      # Download Docker Image Artifact
+      - name: Download Docker Image Artifact
+        uses: ishworkh/docker-image-artifact-download@v1
+        with:
+          image: ${{ env.REGISTRY_URL }}/${{ env.REGISTRY_NAME }}:${{ github.run_number }}
+
+      # Gitlab 로그인
+      - name: Gitlab Login
+        run: docker login https://registry.gitlab.com/my_registry -u ${{ secrets.GITLAB_USER_NAME }} -p ${{ secrets.GITLAB_CONTAINER_ACCESS_TOKEN }}
+
+      # Docker Push
+      - name: Gitlab Push
+        run: docker push ${{ env.REGISTRY_URL }}/${{ env.REGISTRY_NAME }}:${{ github.run_number }}
+      
+      # 배포 결과 알림
+      - name: Notification
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          author_name: Github Action Notification
+          fields: repo, message, commit, workflow, job, took
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          
+      # Remote Deploy
+      - name: Remote Deploy
+        if: ${{ github.event.inputs.isRequiredRemoteDeploy }} == 'true'
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_SSH_ID }}
+          key: ${{ secrets.REMOTE_SSH_KEY }}
+          port: ${{ secrets.REMOTE_SSH_PORT }}
+          script: |
+            bash --login <<EOF
+            docker pull ${{ env.REGISTRY_URL }}/${{ env.REGISTRY_NAME }}:${{ github.run_number }}
+            docker run -it -d -p ${{ secrets.DOCKER_PORT }}:${{ secrets.APPLICATION_PORT }} --name ${{ env.REGISTRY_NAME }} ${{ env.REGISTRY_URL }}/${{ env.REGISTRY_NAME }}:${{ github.run_number }}
+            EOF
+            
+      # 원격 서보 배포 결과 알림
+      - name: Notification
+        if: ${{ github.event.inputs.isRequiredRemoteDeploy }} == 'true'
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          author_name: Github Action Notification
+          custom_payload: |
+            {
+              "attachments": [{
+                  color: '${{ job.status }}' === 'success' ? 'good' : '${{ job.status }}' === 'failure' ? 'danger' : 'warning',
+                  "blocks": [
+                    {
+                      "type": "header",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "Remote Deploy :computer:",
+                        "emoji": true
+                      }
+                    },
+                    {
+                      "type": "section",
+                      "fields": [
+                        {
+                          "type": "mrkdwn",
+                          "text": "*Host*\n${{ secrets.REMOTE_HOST }}"
+                        },
+                        {
+                          "type": "mrkdwn",
+                          "text": "*Registry*\n${{ env.REGISTRY_URL }}"
+                        },
+                        {
+                          "type": "mrkdwn",
+                          "text": "*Docker Image*\n${{ env.REGISTRY_NAME }}"
+                        },
+                        {
+                          "type": "mrkdwn",
+                          "text": "*Tag*\n${{ github.run_number }}"
+                        }
+                      ]
+                    }
+                  ]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
